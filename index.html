@@ -125,6 +125,15 @@
   .avatar { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; flex-shrink: 0; }
   .writer-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+  /* 행 삭제 버튼 */
+  .del-row-btn {
+    background: none; border: none; cursor: pointer;
+    font-size: 13px; padding: 3px 5px; border-radius: 4px;
+    opacity: 0; transition: all 0.12s; line-height: 1;
+  }
+  tbody tr:hover .del-row-btn { opacity: 1; }
+  .del-row-btn:hover { background: var(--red-bg); }
+
   /* 메모 셀 */
   .memo-cell { cursor: pointer; vertical-align: middle; max-width: 160px; }
   .memo-cell:hover { background: var(--accent-light); }
@@ -792,9 +801,12 @@ function renderTable() {
         }
       </td>
       <td style="text-align:center">
-        <button class="status-toggle ${row['입고완료'] ? 'done' : 'pending'}" onclick="toggleStatus(${ai})" title="${row['입고완료'] ? '입고 완료' : '미완료 — 클릭해서 완료 처리'}">
-          ${row['입고완료'] ? '✓ 완료' : '대기'}
-        </button>
+        <div style="display:flex;align-items:center;justify-content:center;gap:6px">
+          <button class="status-toggle ${row['입고완료'] ? 'done' : 'pending'}" onclick="toggleStatus(${ai})" title="${row['입고완료'] ? '입고 완료' : '미완료 — 클릭해서 완료 처리'}">
+            ${row['입고완료'] ? '✓ 완료' : '대기'}
+          </button>
+          <button class="del-row-btn" onclick="deleteRow(${ai})" title="행 삭제">🗑</button>
+        </div>
       </td>
     </tr>`;
   }).join('');
@@ -823,6 +835,15 @@ function editMemo(ai, td) {
   td.innerHTML = '';
   td.appendChild(ta);
   ta.focus();
+}
+
+// ── 행 삭제 ────────────────────────────────────────────────
+function deleteRow(ai) {
+  const name = allData[ai]['작가'] || '이 행';
+  if (!confirm(`"${name}" 행을 삭제할까요?`)) return;
+  allData.splice(ai, 1);
+  applyFilters();
+  showToast('삭제됐습니다');
 }
 
 // ── 입고 완료 토글 ─────────────────────────────────────────
