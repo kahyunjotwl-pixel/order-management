@@ -594,12 +594,17 @@ async function loadFromDB() {
 }
 
 async function saveToDB(row) {
+  // 발주시트 URL 추출 — _sheet 객체 또는 발주시트 필드에서
+  let sheetUrl = '';
+  if (row._sheet?.type === 'link') sheetUrl = row._sheet.url || '';
+  else if (row['발주시트']) sheetUrl = row['발주시트'];
+
   const body = {
     writer: row['작가'] || '',
     manager: row['담당자'] || '',
     order_date: row['발주일'] || '',
     due_date: row['예상납기일'] || '',
-    sheet_url: row['발주시트'] || (row._sheet?.url || ''),
+    sheet_url: sheetUrl,
     memo: row['메모'] || '',
     completed: row['입고완료'] || false
   };
