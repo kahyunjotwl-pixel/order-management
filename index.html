@@ -576,17 +576,31 @@ async function loadFromDB() {
   showToast('데이터 불러오는 중...');
   const rows = await sbFetch('orders?select=*&order=created_at.asc');
   if (!rows) { showToast('데이터 로드 실패'); return; }
-  allData = rows.map(r => ({
-    _id: r.id,
-    '작가': r.writer || '',
-    '담당자': r.manager || MANAGERS[0],
-    '발주일': r.order_date || '',
-    '예상납기일': r.due_date || '',
-    '발주시트': r.sheet_url || '',
-    '메모': r.memo || '',
-    '입고완료': r.completed || false,
-    _sheet: r.sheet_url ? { type: 'link', url: r.sheet_url, label: '' } : null
-  }));
+  allData = rows.map(r => {
+    const sheetUrl = (r.sheet_url || '').trim();
+    let sheet = null;
+    if (sheetUrl) {
+      sheet = { type: 'link', url: sheetUrl, label: '' };
+      // 표시 이름 자동 추출
+      try {
+        const u = new URL(sheetUrl);
+        sheet.label = u.hostname.replace('www.', '') + '/…';
+      } catch(e) {
+        sheet.label = sheetUrl;
+      }
+    }
+    return {
+      _id: r.id,
+      '작가': r.writer || '',
+      '담당자': r.manager || MANAGERS[0],
+      '발주일': r.order_date || '',
+      '예상납기일': r.due_date || '',
+      '발주시트': sheetUrl,
+      '메모': r.memo || '',
+      '입고완료': r.completed || false,
+      _sheet: sheet
+    };
+  });
   populateManagerFilter();
   showUI();
   applyFilters();
@@ -1115,18 +1129,18 @@ function attachFile(file) {
   reader.readAsDataURL(file);
 }
 
-function saveModal() {
+async function saveModal() {
   if (modalIdx < 0) return;
   if (modalTab === 'link') {
     const url = document.getElementById('linkInput').value.trim();
     if (!url) { showToast('URL을 입력해 주세요'); return; }
-    allData[modalIdx]._sheet = { type:'link', url, label: document.getElementById('linkLabel').value.trim() };
+    allData[modalIdx]._sheet = { type:'link', url, label: document.getElementById('linkLabel').value.trim() || url };
     allData[modalIdx]['발주시트'] = url;
   } else {
     if (!pendingFile) { showToast('파일을 선택해 주세요'); return; }
     allData[modalIdx]._sheet = { type:'file', ...pendingFile };
   }
-  saveToDB(allData[modalIdx]);
+  await saveToDB(allData[modalIdx]);
   document.getElementById('modalBg').classList.remove('open');
   pendingFile = null;
   applyFilters();
