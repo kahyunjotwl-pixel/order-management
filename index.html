@@ -146,6 +146,43 @@
     resize: none; font-family: inherit;
   }
 
+  /* 부족재고 연결 버튼 */
+  .stock-link-btn {
+    background: var(--surface2); border: 1px solid var(--border2);
+    border-radius: var(--radius-sm); padding: 4px 8px; font-size: 12px;
+    cursor: pointer; transition: all 0.12s; color: var(--text2);
+    display: inline-flex; align-items: center; gap: 4px; position: relative;
+  }
+  .stock-link-btn:hover { background: var(--amber-bg); border-color: #D4A017; color: var(--amber); }
+  .stock-link-btn.has-stock { background: var(--amber-bg); border-color: #D4A017; color: var(--amber); }
+  .stock-link-btn.has-stock.unread { animation: pulse-amber 1.5s ease-in-out infinite; }
+  .stock-link-btn.all-done { background: var(--green-bg); border-color: #9FE1CB; color: var(--green); }
+  .stock-cnt { background: var(--amber); color: #fff; border-radius: 10px; padding: 0 5px; font-size: 10px; font-weight: 700; }
+  .unread-dot {
+    position: absolute; top: -3px; right: -3px;
+    width: 8px; height: 8px; background: var(--red);
+    border-radius: 50%; border: 1.5px solid var(--surface);
+    animation: pulse-red 1.2s ease-in-out infinite;
+  }
+  @keyframes pulse-amber {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(138,90,0,0.4); }
+    50% { box-shadow: 0 0 0 4px rgba(138,90,0,0); }
+  }
+  @keyframes pulse-red {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.3); opacity: 0.7; }
+  }
+
+  /* 부족재고 표 인풋 */
+  .stock-table-input {
+    width: 100%; padding: 4px 6px; font-size: 12px;
+    border: 1px solid transparent; border-radius: 4px;
+    background: transparent; color: var(--text); outline: none;
+    font-family: inherit;
+  }
+  .stock-table-input:focus { border-color: var(--accent); background: var(--surface); }
+  .stock-table-input::placeholder { color: var(--text3); }
+
   /* 입고완료 토글 */
   .status-toggle {
     display: inline-flex; align-items: center; justify-content: center;
@@ -421,6 +458,7 @@
             <th><div class="th-inner">발주 시트</div></th>
             <th><div class="th-inner">메모</div></th>
             <th onclick="sortBy('입고완료')" id="th-입고완료"><div class="th-inner">입고 완료 <span class="sort-arrow">↕</span></div></th>
+            <th style="width:80px"><div class="th-inner">부족재고</div></th>
           </tr>
         </thead>
         <tbody id="tbody"></tbody>
@@ -870,6 +908,26 @@ function renderTable() {
           <button class="del-row-btn" onclick="deleteRow(${ai})" title="행 삭제">🗑</button>
         </div>
       </td>
+      <td style="text-align:center;width:90px">
+        ${(() => {
+          const writerName = row['작가'] || '';
+          const sc = stockCards.filter(c => c.writer === writerName);
+          const cnt = sc.length;
+          const hasUnread = sc.some(c => c.unread);
+          const hasPending = sc.some(c => c.status !== 'confirmed');
+          let btnCls = '';
+          if (cnt > 0) {
+            if (hasUnread) btnCls = 'has-stock unread';
+            else if (hasPending) btnCls = 'has-stock';
+            else btnCls = 'all-done';
+          }
+          return `<button class="stock-link-btn ${btnCls}"
+            onclick="goToStock('${writerName.replace(/'/g,"\\'")}','${(row['담당자']||'').replace(/'/g,"\\'")}')">
+            📦${cnt > 0 ? ` <span class="stock-cnt">${cnt}</span>` : ''}
+            ${hasUnread ? '<span class="unread-dot"></span>' : ''}
+          </button>`;
+        })()}
+      </td>
     </tr>`;
   }).join('');
 
@@ -1148,15 +1206,31 @@ function switchMainTab(tab) {
 let stockCards = [];
 let stockIdSeq = 0;
 
+// 발주 리스트에서 부족재고 탭으로 이동 + 해당 작가 카드 생성/포커스
+function goToStock(writerName, managerName) {
+  switchMainTab('stock');
+  // 해당 작가 카드가 없으면 생성
+  const exists = stockCards.find(c => c.writer === writerName);
+  if (!exists) {
+    addStockCard(writerName, managerName);
+  } else {
+    // 있으면 스크롤
+    setTimeout(() => {
+      const el = document.getElementById(`sc-${exists.id}`);
+      if (el) el.scrollIntoView({ behavior:'smooth', block:'center' });
+    }, 100);
+  }
+}
+
 function addStockCard(writerName, managerName) {
   stockCards.unshift({
     id: ++stockIdSeq,
     writer:   writerName || '',
     manager:  managerName || MANAGERS[0],
-    product:  '',
-    qty:      '',
-    memo:     '',
-    status:   'pending', // pending | requested | confirmed
+    items: [{ product:'', qty:'', memo:'' }],
+    status:   'pending',
+    unread:   true,   // 담당자 미확인 상태
+    checkedBy: [],    // 확인한 담당자 목록
     createdAt: new Date().toISOString()
   });
   renderStockCards();
@@ -1168,7 +1242,46 @@ function deleteStockCard(id) {
   renderStockCards();
 }
 
-function updateStock(id, field, value) {
+function addStockItem(id) {
+  const card = stockCards.find(c => c.id === id);
+  if (card) { card.items.push({ product:'', qty:'', memo:'' }); renderStockCards(); }
+}
+
+function removeStockItem(id, idx) {
+  const card = stockCards.find(c => c.id === id);
+  if (card && card.items.length > 1) { card.items.splice(idx, 1); renderStockCards(); }
+}
+
+function updateStockItem(id, idx, field, value) {
+  const card = stockCards.find(c => c.id === id);
+  if (card && card.items[idx]) {
+    card.items[idx][field] = value;
+    card.unread = true;  // 수정되면 다시 미확인으로
+    card.checkedBy = [];
+  }
+}
+
+function checkManager(id, manager, checked) {
+  const card = stockCards.find(c => c.id === id);
+  if (!card) return;
+  if (!card.checkedBy) card.checkedBy = [];
+  if (checked) {
+    if (!card.checkedBy.includes(manager)) card.checkedBy.push(manager);
+  } else {
+    card.checkedBy = card.checkedBy.filter(m => m !== manager);
+  }
+  // 모든 담당자가 확인하면 unread 해제
+  if (MANAGERS.every(m => card.checkedBy.includes(m))) {
+    card.unread = false;
+  } else {
+    card.unread = true;
+  }
+  renderStockCards();
+  renderTable();
+  showToast(checked ? `✓ ${manager} 확인 완료` : `${manager} 확인 취소`);
+}
+
+
   const card = stockCards.find(c => c.id === id);
   if (card) card[field] = value;
 }
@@ -1206,10 +1319,10 @@ function renderStockCards() {
       <p>부족재고 요청이 없습니다</p>
       <p style="font-size:12px;color:var(--text3);margin-top:4px">+ 요청 추가 버튼으로 시작하세요</p>
     </div>`;
+    // 발주리스트 테이블도 새로고침 (배지 업데이트)
+    renderTable();
     return;
   }
-
-  const statusLabel = { pending:'미요청', requested:'요청됨', confirmed:'확정' };
 
   grid.innerHTML = list.map(c => {
     const [bgC, fgC] = avatarColor(c.writer || '?');
@@ -1217,13 +1330,35 @@ function renderStockCards() {
     const mgrCls = mgrIdx >= 0 ? `mgr-${mgrIdx}` : '';
     const d = new Date(c.createdAt);
     const dateStr = `${d.getMonth()+1}/${d.getDate()}`;
+
+    const itemRows = c.items.map((item, idx) => `
+      <tr>
+        <td style="padding:6px 8px;font-size:12px;color:var(--text3);text-align:center;width:28px">${idx+1}</td>
+        <td style="padding:4px 6px">
+          <input type="text" value="${item.product}" placeholder="상품명"
+            class="stock-table-input" oninput="updateStockItem(${c.id},${idx},'product',this.value)">
+        </td>
+        <td style="padding:4px 6px;width:70px">
+          <input type="number" value="${item.qty}" placeholder="0" min="0"
+            class="stock-table-input" style="text-align:center"
+            oninput="updateStockItem(${c.id},${idx},'qty',this.value)">
+        </td>
+        <td style="padding:4px 6px">
+          <input type="text" value="${item.memo}" placeholder="색상, 사이즈 등"
+            class="stock-table-input" oninput="updateStockItem(${c.id},${idx},'memo',this.value)">
+        </td>
+        <td style="padding:4px 6px;width:28px;text-align:center">
+          <button onclick="removeStockItem(${c.id},${idx})" class="stock-del-btn" ${c.items.length===1?'style="opacity:0.2;cursor:default"':''}>✕</button>
+        </td>
+      </tr>`).join('');
+
     return `
     <div class="stock-card" id="sc-${c.id}">
       <div class="stock-card-header">
         <div class="stock-card-writer">
           <div class="avatar" style="background:${bgC};color:${fgC};width:26px;height:26px;font-size:10px">${initials(c.writer||'?')}</div>
           <input type="text" value="${c.writer}" placeholder="작가명"
-            style="border:none;outline:none;font-size:14px;font-weight:600;background:transparent;width:100px;color:var(--text)"
+            style="border:none;outline:none;font-size:14px;font-weight:600;background:transparent;width:120px;color:var(--text)"
             oninput="updateStock(${c.id},'writer',this.value)">
         </div>
         <div style="display:flex;align-items:center;gap:6px">
@@ -1233,39 +1368,62 @@ function renderStockCards() {
               ${MANAGERS.map(m=>`<option value="${m}" ${m===c.manager?'selected':''}>${m}</option>`).join('')}
             </select>
           </span>
-          <button class="stock-del-btn" onclick="deleteStockCard(${c.id})" title="삭제">✕</button>
+          <button class="stock-del-btn" onclick="deleteStockCard(${c.id})" title="카드 삭제">✕</button>
         </div>
       </div>
 
-      <div>
-        <div class="stock-field-label">상품명</div>
-        <input type="text" class="inline-input" value="${c.product}" placeholder="상품명 입력"
-          style="margin-bottom:0" oninput="updateStock(${c.id},'product',this.value)">
+      <!-- 표 형식 아이템 목록 -->
+      <div style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;margin-top:4px">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr style="background:var(--surface2)">
+              <th style="padding:6px 8px;font-size:10px;font-weight:600;color:var(--text3);text-align:center;width:28px">#</th>
+              <th style="padding:6px 8px;font-size:10px;font-weight:600;color:var(--text3);text-align:left">상품명</th>
+              <th style="padding:6px 8px;font-size:10px;font-weight:600;color:var(--text3);text-align:center;width:70px">수량</th>
+              <th style="padding:6px 8px;font-size:10px;font-weight:600;color:var(--text3);text-align:left">메모</th>
+              <th style="width:28px"></th>
+            </tr>
+          </thead>
+          <tbody>${itemRows}</tbody>
+        </table>
+        <button onclick="addStockItem(${c.id})"
+          style="width:100%;padding:7px;font-size:12px;color:var(--text2);background:var(--surface2);border:none;border-top:1px solid var(--border);cursor:pointer;text-align:center">
+          + 항목 추가
+        </button>
       </div>
 
-      <div>
-        <div class="stock-field-label">요청 수량</div>
-        <div class="stock-qty-row">
-          <input type="number" class="stock-qty-input" value="${c.qty}" placeholder="0" min="0"
-            oninput="updateStock(${c.id},'qty',this.value)">
-          <span class="stock-qty-unit">개</span>
-        </div>
-      </div>
-
-      <div>
-        <div class="stock-field-label">메모</div>
-        <textarea class="stock-memo" placeholder="사이즈, 색상, 긴급도 등 메모..."
-          oninput="updateStock(${c.id},'memo',this.value)">${c.memo}</textarea>
-      </div>
-
-      <div class="stock-card-footer">
+      <div class="stock-card-footer" style="margin-top:10px">
         <button class="stock-status-badge ${c.status}" onclick="cycleStockStatus(${c.id})">
           ${c.status === 'pending' ? '○ 미요청' : c.status === 'requested' ? '● 요청됨' : '✓ 확정'}
         </button>
         <span class="stock-card-meta">${dateStr} 등록</span>
       </div>
+
+      <!-- 담당자 확인 체크박스 -->
+      <div style="border-top:1px solid var(--border);padding-top:8px;margin-top:2px">
+        <div style="font-size:10px;font-weight:600;color:var(--text3);letter-spacing:.4px;text-transform:uppercase;margin-bottom:6px">담당자 확인</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          ${MANAGERS.map(m => {
+            const checked = (c.checkedBy||[]).includes(m);
+            return `<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;color:${checked?'var(--green)':'var(--text2)'}">
+              <input type="checkbox" ${checked?'checked':''} onchange="checkManager(${c.id},'${m}',this.checked)"
+                style="accent-color:var(--green);width:13px;height:13px">
+              ${m}
+            </label>`;
+          }).join('')}
+        </div>
+        ${c.unread ? `<div style="font-size:10px;color:var(--amber);margin-top:6px;display:flex;align-items:center;gap:4px">
+          <span style="width:6px;height:6px;background:var(--amber);border-radius:50%;display:inline-block"></span>
+          미확인 요청이 있습니다
+        </div>` : `<div style="font-size:10px;color:var(--green);margin-top:6px;display:flex;align-items:center;gap:4px">
+          <span>✓</span> 모두 확인함
+        </div>`}
+      </div>
     </div>`;
   }).join('');
+
+  // 발주리스트 배지도 업데이트
+  renderTable();
 }
 
 // ── 토스트 ─────────────────────────────────────────────────
