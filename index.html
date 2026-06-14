@@ -1282,11 +1282,10 @@ function checkManager(id, manager, checked) {
 }
 
 
+function updateStock(id, field, value) {
   const card = stockCards.find(c => c.id === id);
   if (card) card[field] = value;
 }
-
-function updateStock(id, field, value) {
 
 function cycleStockStatus(id) {
   const card = stockCards.find(c => c.id === id);
