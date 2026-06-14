@@ -1286,6 +1286,8 @@ function checkManager(id, manager, checked) {
   if (card) card[field] = value;
 }
 
+function updateStock(id, field, value) {
+
 function cycleStockStatus(id) {
   const card = stockCards.find(c => c.id === id);
   if (!card) return;
