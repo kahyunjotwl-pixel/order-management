@@ -175,13 +175,16 @@
 
   /* 부족재고 표 인풋 */
   .stock-table-input {
-    width: 100%; padding: 4px 6px; font-size: 12px;
+    width: 100%; padding: 5px 6px; font-size: 12px;
     border: 1px solid transparent; border-radius: 4px;
     background: transparent; color: var(--text); outline: none;
-    font-family: inherit;
+    font-family: inherit; resize: none; line-height: 1.4;
+    white-space: pre-wrap; word-break: break-word; overflow: hidden;
   }
   .stock-table-input:focus { border-color: var(--accent); background: var(--surface); }
   .stock-table-input::placeholder { color: var(--text3); }
+  .sitems-table { table-layout: fixed; }
+  .sitems-table td { vertical-align: top; padding-top: 7px !important; }
 
   /* 입고완료 토글 */
   .status-toggle {
@@ -1211,6 +1214,7 @@ function loadSample() {
 populateManagerFilter();
 populateStockManagerFilter();
 loadFromDB();
+loadStockFromDB();
 
 // ── 탭 전환 ────────────────────────────────────────────────
 function switchMainTab(tab) {
@@ -1222,8 +1226,63 @@ function switchMainTab(tab) {
 }
 
 // ── 부족재고 데이터 ────────────────────────────────────────
+// ── 텍스트영역 자동 높이 조절 ───────────────────────────────
+function autoGrow(el) {
+  el.style.height = 'auto';
+  el.style.height = (el.scrollHeight) + 'px';
+}
+
 let stockCards = [];
 let stockIdSeq = 0;
+
+// ── 부족재고 Supabase 저장/로드/삭제 ─────────────────────────
+async function saveStockToDB(card) {
+  const body = {
+    writer: card.writer || '',
+    manager: card.manager || '',
+    items: JSON.stringify(card.items || []),
+    status: card.status || 'pending',
+    checked_by: JSON.stringify(card.checkedBy || []),
+    unread: card.unread !== false
+  };
+  if (card._id) {
+    await sbFetch(`stock_requests?id=eq.${card._id}`, {
+      method: 'PATCH', body: JSON.stringify(body), prefer: 'return=minimal'
+    });
+  } else {
+    const res = await sbFetch('stock_requests', {
+      method: 'POST', body: JSON.stringify([body]), prefer: 'return=representation'
+    });
+    if (res && res[0]) card._id = res[0].id;
+  }
+}
+
+async function deleteStockFromDB(id) {
+  await sbFetch(`stock_requests?id=eq.${id}`, { method: 'DELETE' });
+}
+
+async function loadStockFromDB() {
+  const rows = await sbFetch('stock_requests?select=*&order=created_at.asc');
+  if (!rows) return;
+  stockCards = rows.map(r => {
+    let items = [];
+    let checkedBy = [];
+    try { items = JSON.parse(r.items || '[]'); } catch(e) { items = []; }
+    try { checkedBy = JSON.parse(r.checked_by || '[]'); } catch(e) { checkedBy = []; }
+    return {
+      _id: r.id,
+      writer: r.writer || '',
+      manager: r.manager || MANAGERS[0],
+      items: items.length ? items : [{ product:'', qty:'', memo:'' }],
+      status: r.status || 'pending',
+      checkedBy: checkedBy,
+      unread: r.unread !== false,
+      createdAt: r.created_at || new Date().toISOString()
+    };
+  });
+  renderStockCards();
+  renderTable();
+}
 
 // 발주 리스트에서 부족재고 탭으로 이동 + 해당 작가 카드 생성/포커스
 function goToStock(writerName, managerName) {
@@ -1241,8 +1300,8 @@ function goToStock(writerName, managerName) {
   }
 }
 
-function addStockCard(writerName, managerName) {
-  stockCards.unshift({
+async function addStockCard(writerName, managerName) {
+  const card = {
     id: ++stockIdSeq,
     writer:   writerName || '',
     manager:  managerName || MANAGERS[0],
@@ -1251,24 +1310,45 @@ function addStockCard(writerName, managerName) {
     unread:   true,   // 담당자 미확인 상태
     checkedBy: [],    // 확인한 담당자 목록
     createdAt: new Date().toISOString()
-  });
+  };
+  stockCards.unshift(card);
   renderStockCards();
   showToast('요청 카드가 추가됐습니다');
+  await saveStockToDB(card);
+  renderStockCards(); // _id 반영
 }
 
-function deleteStockCard(id) {
+async function deleteStockCard(id) {
+  const card = stockCards.find(c => c.id === id);
+  if (card?._id) await deleteStockFromDB(card._id);
   stockCards = stockCards.filter(c => c.id !== id);
   renderStockCards();
+  renderTable();
 }
 
 function addStockItem(id) {
   const card = stockCards.find(c => c.id === id);
-  if (card) { card.items.push({ product:'', qty:'', memo:'' }); renderStockCards(); }
+  if (card) {
+    card.items.push({ product:'', qty:'', memo:'' });
+    renderStockCards();
+    saveStockToDB(card);
+  }
 }
 
 function removeStockItem(id, idx) {
   const card = stockCards.find(c => c.id === id);
-  if (card && card.items.length > 1) { card.items.splice(idx, 1); renderStockCards(); }
+  if (card && card.items.length > 1) {
+    card.items.splice(idx, 1);
+    renderStockCards();
+    saveStockToDB(card);
+  }
+}
+
+// 입력 중 잦은 저장 방지를 위한 디바운스
+const _stockSaveTimers = {};
+function debounceSaveStock(card) {
+  if (_stockSaveTimers[card.id]) clearTimeout(_stockSaveTimers[card.id]);
+  _stockSaveTimers[card.id] = setTimeout(() => saveStockToDB(card), 600);
 }
 
 function updateStockItem(id, idx, field, value) {
@@ -1277,6 +1357,7 @@ function updateStockItem(id, idx, field, value) {
     card.items[idx][field] = value;
     card.unread = true;  // 수정되면 다시 미확인으로
     card.checkedBy = [];
+    debounceSaveStock(card);
   }
 }
 
@@ -1289,8 +1370,8 @@ function checkManager(id, manager, checked) {
   } else {
     card.checkedBy = card.checkedBy.filter(m => m !== manager);
   }
-  // 모든 담당자가 확인하면 unread 해제
-  if (MANAGERS.every(m => card.checkedBy.includes(m))) {
+  // 이 부족재고 카드의 "담당자"(card.manager) 본인이 체크하면 알림 해제
+  if (card.checkedBy.includes(card.manager)) {
     card.unread = false;
   } else {
     card.unread = true;
@@ -1298,12 +1379,16 @@ function checkManager(id, manager, checked) {
   renderStockCards();
   renderTable();
   showToast(checked ? `✓ ${manager} 확인 완료` : `${manager} 확인 취소`);
+  saveStockToDB(card);
 }
-
 
 function updateStock(id, field, value) {
   const card = stockCards.find(c => c.id === id);
-  if (card) card[field] = value;
+  if (card) {
+    card[field] = value;
+    debounceSaveStock(card);
+    if (field === 'writer' || field === 'manager') renderTable();
+  }
 }
 
 function cycleStockStatus(id) {
@@ -1314,6 +1399,7 @@ function cycleStockStatus(id) {
   renderStockCards();
   const labels = { pending:'미요청', requested:'요청됨', confirmed:'확정' };
   showToast('상태: ' + labels[card.status]);
+  saveStockToDB(card);
 }
 
 function populateStockManagerFilter() {
@@ -1353,21 +1439,23 @@ function renderStockCards() {
 
     const itemRows = c.items.map((item, idx) => `
       <tr>
-        <td style="padding:6px 8px;font-size:12px;color:var(--text3);text-align:center;width:28px">${idx+1}</td>
+        <td style="padding:7px 8px;font-size:12px;color:var(--text3);text-align:center;width:24px">${idx+1}</td>
         <td style="padding:4px 6px">
-          <input type="text" value="${item.product}" placeholder="상품명"
-            class="stock-table-input" oninput="updateStockItem(${c.id},${idx},'product',this.value)">
+          <textarea placeholder="상품명" rows="1"
+            class="stock-table-input" oninput="autoGrow(this);updateStockItem(${c.id},${idx},'product',this.value)"
+            onfocus="autoGrow(this)">${item.product}</textarea>
         </td>
-        <td style="padding:4px 6px;width:70px">
+        <td style="padding:4px 6px;width:56px">
           <input type="number" value="${item.qty}" placeholder="0" min="0"
             class="stock-table-input" style="text-align:center"
             oninput="updateStockItem(${c.id},${idx},'qty',this.value)">
         </td>
         <td style="padding:4px 6px">
-          <input type="text" value="${item.memo}" placeholder="색상, 사이즈 등"
-            class="stock-table-input" oninput="updateStockItem(${c.id},${idx},'memo',this.value)">
+          <textarea placeholder="색상, 사이즈 등" rows="1"
+            class="stock-table-input" oninput="autoGrow(this);updateStockItem(${c.id},${idx},'memo',this.value)"
+            onfocus="autoGrow(this)">${item.memo}</textarea>
         </td>
-        <td style="padding:4px 6px;width:28px;text-align:center">
+        <td style="padding:4px 6px;width:24px;text-align:center">
           <button onclick="removeStockItem(${c.id},${idx})" class="stock-del-btn" ${c.items.length===1?'style="opacity:0.2;cursor:default"':''}>✕</button>
         </td>
       </tr>`).join('');
@@ -1394,7 +1482,7 @@ function renderStockCards() {
 
       <!-- 표 형식 아이템 목록 -->
       <div style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;margin-top:4px">
-        <table style="width:100%;border-collapse:collapse">
+        <table class="sitems-table" style="width:100%;border-collapse:collapse">
           <thead>
             <tr style="background:var(--surface2)">
               <th style="padding:6px 8px;font-size:10px;font-weight:600;color:var(--text3);text-align:center;width:28px">#</th>
@@ -1421,14 +1509,15 @@ function renderStockCards() {
 
       <!-- 담당자 확인 체크박스 -->
       <div style="border-top:1px solid var(--border);padding-top:8px;margin-top:2px">
-        <div style="font-size:10px;font-weight:600;color:var(--text3);letter-spacing:.4px;text-transform:uppercase;margin-bottom:6px">담당자 확인</div>
+        <div style="font-size:10px;font-weight:600;color:var(--text3);letter-spacing:.4px;text-transform:uppercase;margin-bottom:6px">담당자 확인 <span style="text-transform:none;font-weight:400">(${c.manager}님이 체크하면 알림 해제)</span></div>
         <div style="display:flex;flex-wrap:wrap;gap:6px">
           ${MANAGERS.map(m => {
             const checked = (c.checkedBy||[]).includes(m);
-            return `<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;color:${checked?'var(--green)':'var(--text2)'}">
+            const isOwner = m === c.manager;
+            return `<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;color:${checked?'var(--green)':'var(--text2)'};${isOwner?'font-weight:700;':''}">
               <input type="checkbox" ${checked?'checked':''} onchange="checkManager(${c.id},'${m}',this.checked)"
                 style="accent-color:var(--green);width:13px;height:13px">
-              ${m}
+              ${m}${isOwner?' ★':''}
             </label>`;
           }).join('')}
         </div>
@@ -1436,7 +1525,7 @@ function renderStockCards() {
           <span style="width:6px;height:6px;background:var(--amber);border-radius:50%;display:inline-block"></span>
           미확인 요청이 있습니다
         </div>` : `<div style="font-size:10px;color:var(--green);margin-top:6px;display:flex;align-items:center;gap:4px">
-          <span>✓</span> 모두 확인함
+          <span>✓</span> 확인 완료
         </div>`}
       </div>
     </div>`;
@@ -1444,6 +1533,11 @@ function renderStockCards() {
 
   // 발주리스트 배지도 업데이트
   renderTable();
+
+  // 렌더링된 textarea 높이 자동 조절
+  requestAnimationFrame(() => {
+    document.querySelectorAll('#stockGrid textarea.stock-table-input').forEach(autoGrow);
+  });
 }
 
 // ── 토스트 ─────────────────────────────────────────────────
