@@ -97,11 +97,11 @@
   /* Table */
   .table-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-  col.c-writer  { width: 130px; }
-  col.c-manager { width: 100px; }
-  col.c-order   { width: 105px; }
-  col.c-due     { width: 105px; }
-  col.c-memo   { width: 160px; }
+  col.c-writer  { width: 115px; }
+  col.c-manager { width: 90px; }
+  col.c-order   { width: 95px; }
+  col.c-due     { width: 130px; }
+  col.c-memo   { width: 150px; }
   col.c-status  { width: 90px; }
 
   thead th {
@@ -125,6 +125,8 @@
   tbody tr:last-child { border-bottom: none; }
   tbody tr:hover { background: #FAFAF8; }
   tbody td { padding: 12px 14px; font-size: 13px; vertical-align: middle; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  td.due-cell { white-space: normal; }
+  td.due-cell .date-overdue, td.due-cell .date-soon, td.due-cell .date-val { white-space: nowrap; }
 
   /* Writer */
   .writer-cell { display: flex; align-items: center; gap: 8px; }
@@ -497,7 +499,6 @@
         <option value="">상태 전체</option>
         <option value="pending">미요청</option>
         <option value="requested">요청됨</option>
-        <option value="confirmed">확정</option>
       </select>
       <div class="toolbar-right" style="margin-left:auto">
         <button class="btn btn-primary btn-sm" onclick="addStockCard()">+ 요청 추가</button>
@@ -952,7 +953,7 @@ function renderTable() {
       </td>
       <td>${mgrBadgeHTML(row['담당자'], ai)}</td>
       <td onclick="editDate(${ai},'발주일',this)" style="cursor:pointer" title="클릭해서 수정">${fmtDate(row['발주일'])}</td>
-      <td onclick="editDate(${ai},'예상납기일',this)" style="cursor:pointer" title="클릭해서 수정">${fmtDueDate(row['예상납기일'])}</td>
+      <td class="due-cell" onclick="editDate(${ai},'예상납기일',this)" style="cursor:pointer" title="클릭해서 수정">${fmtDueDate(row['예상납기일'])}</td>
       <td>
         <div class="sheet-cell">
           ${sheetCellHTML(row._sheet)}
@@ -981,12 +982,9 @@ function renderTable() {
           const sc = stockCards.filter(c => c.writer === writerName);
           const cnt = sc.length;
           const hasUnread = sc.some(c => c.unread);
-          const hasPending = sc.some(c => c.status !== 'confirmed');
           let btnCls = '';
           if (cnt > 0) {
-            if (hasUnread) btnCls = 'has-stock unread';
-            else if (hasPending) btnCls = 'has-stock';
-            else btnCls = 'all-done';
+            btnCls = hasUnread ? 'has-stock unread' : 'all-done';
           }
           return `<button class="stock-link-btn ${btnCls}"
             onclick="goToStock('${writerName.replace(/'/g,"\\'")}','${(row['담당자']||'').replace(/'/g,"\\'")}')">
@@ -1405,24 +1403,19 @@ function updateStockItem(id, idx, field, value) {
   }
 }
 
-function checkManager(id, manager, checked) {
+function toggleManagerCheck(id) {
   const card = stockCards.find(c => c.id === id);
   if (!card) return;
-  if (!card.checkedBy) card.checkedBy = [];
-  if (checked) {
-    if (!card.checkedBy.includes(manager)) card.checkedBy.push(manager);
+  card.unread = !card.unread;
+  if (!card.unread) {
+    // 확인 완료 처리 - 카드 담당자를 확인자로 기록
+    card.checkedBy = [card.manager];
   } else {
-    card.checkedBy = card.checkedBy.filter(m => m !== manager);
-  }
-  // 이 부족재고 카드의 "담당자"(card.manager) 본인이 체크하면 알림 해제
-  if (card.checkedBy.includes(card.manager)) {
-    card.unread = false;
-  } else {
-    card.unread = true;
+    card.checkedBy = [];
   }
   renderStockCards();
   renderTable();
-  showToast(checked ? `✓ ${manager} 확인 완료` : `${manager} 확인 취소`);
+  showToast(card.unread ? '담당자 확인이 취소됐습니다' : `✓ ${card.manager} 확인 완료`);
   saveStockToDB(card);
 }
 
@@ -1438,10 +1431,9 @@ function updateStock(id, field, value) {
 function cycleStockStatus(id) {
   const card = stockCards.find(c => c.id === id);
   if (!card) return;
-  const order = ['pending','requested','confirmed'];
-  card.status = order[(order.indexOf(card.status) + 1) % order.length];
+  card.status = card.status === 'pending' ? 'requested' : 'pending';
   renderStockCards();
-  const labels = { pending:'미요청', requested:'요청됨', confirmed:'확정' };
+  const labels = { pending:'미요청', requested:'요청됨' };
   showToast('상태: ' + labels[card.status]);
   saveStockToDB(card);
 }
@@ -1544,33 +1536,14 @@ function renderStockCards() {
         </button>
       </div>
 
-      <div class="stock-card-footer" style="margin-top:10px">
-        <button class="stock-status-badge ${c.status}" onclick="cycleStockStatus(${c.id})">
-          ${c.status === 'pending' ? '○ 미요청' : c.status === 'requested' ? '● 요청됨' : '✓ 확정'}
+      <div class="stock-card-footer" style="margin-top:10px;flex-wrap:wrap;gap:6px">
+        <button class="stock-status-badge ${c.status === 'pending' ? 'pending' : 'requested'}" onclick="cycleStockStatus(${c.id})">
+          ${c.status === 'pending' ? '○ 미요청' : '● 요청됨'}
+        </button>
+        <button class="stock-status-badge ${c.unread ? 'pending' : 'confirmed'}" onclick="toggleManagerCheck(${c.id})" title="${c.manager} 본인이 확인했는지 표시">
+          ${c.unread ? `○ 담당자 확인` : `✓ 담당자 확인 완료`}
         </button>
         <span class="stock-card-meta">${dateStr} 등록</span>
-      </div>
-
-      <!-- 담당자 확인 체크박스 -->
-      <div style="border-top:1px solid var(--border);padding-top:8px;margin-top:2px">
-        <div style="font-size:10px;font-weight:600;color:var(--text3);letter-spacing:.4px;text-transform:uppercase;margin-bottom:6px">담당자 확인 <span style="text-transform:none;font-weight:400">(${c.manager}님이 체크하면 알림 해제)</span></div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px">
-          ${MANAGERS.map(m => {
-            const checked = (c.checkedBy||[]).includes(m);
-            const isOwner = m === c.manager;
-            return `<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;color:${checked?'var(--green)':'var(--text2)'};${isOwner?'font-weight:700;':''}">
-              <input type="checkbox" ${checked?'checked':''} onchange="checkManager(${c.id},'${m}',this.checked)"
-                style="accent-color:var(--green);width:13px;height:13px">
-              ${m}${isOwner?' ★':''}
-            </label>`;
-          }).join('')}
-        </div>
-        ${c.unread ? `<div style="font-size:10px;color:var(--amber);margin-top:6px;display:flex;align-items:center;gap:4px">
-          <span style="width:6px;height:6px;background:var(--amber);border-radius:50%;display:inline-block"></span>
-          미확인 요청이 있습니다
-        </div>` : `<div style="font-size:10px;color:var(--green);margin-top:6px;display:flex;align-items:center;gap:4px">
-          <span>✓</span> 확인 완료
-        </div>`}
       </div>
     </div>`;
   }).join('');
