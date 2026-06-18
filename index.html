@@ -72,10 +72,10 @@
   #fileInput { display: none; }
 
   /* Stats */
-  .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 18px; }
-  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); }
-  .stat-card .s-label { font-size: 11px; font-weight: 600; color: var(--text3); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 4px; }
-  .stat-card .s-value { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
+  .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 8px; margin-bottom: 14px; max-width: 480px; }
+  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; box-shadow: var(--shadow); }
+  .stat-card .s-label { font-size: 10px; font-weight: 600; color: var(--text3); letter-spacing: 0.3px; text-transform: uppercase; margin-bottom: 2px; }
+  .stat-card .s-value { font-size: 16px; font-weight: 700; letter-spacing: -0.3px; }
 
   /* Toolbar */
   .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
@@ -115,7 +115,13 @@
   thead th .sort-arrow { font-size: 10px; opacity: 0.3; }
   thead th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
 
-  tbody tr { border-bottom: 1px solid var(--border); transition: background 0.1s; }
+  tbody tr { border-bottom: 1px solid var(--border); transition: background 0.1s; position: relative; }
+  .row-resize-handle {
+    position: absolute; left: 0; right: 0; bottom: -3px; height: 6px;
+    cursor: row-resize; z-index: 5;
+  }
+  .row-resize-handle:hover { background: var(--accent-light); }
+  tr.resizing { background: var(--accent-light) !important; }
   tbody tr:last-child { border-bottom: none; }
   tbody tr:hover { background: #FAFAF8; }
   tbody td { padding: 12px 14px; font-size: 13px; vertical-align: middle; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -404,13 +410,12 @@
 
 <header class="app-header">
   <div class="logo"><div class="logo-dot"></div>발주 관리</div>
-  <div class="header-meta" id="headerMeta">—</div>
 </header>
 
 <main class="main">
   <div class="page-title">
     <h1>발주 관리</h1>
-    <p>셀을 클릭해서 바로 수정하거나, 엑셀 업로드로 불러오세요.</p>
+    <p>셀을 클릭해서 바로 수정하세요.</p>
   </div>
 
   <!-- 탭 네비게이션 -->
@@ -436,12 +441,10 @@
     </select>
     <div class="toolbar-right">
       <span class="result-count" id="resultCount"></span>
-      <button class="btn btn-ghost btn-sm" onclick="resetAll()">초기화</button>
-      <button class="btn btn-ghost btn-sm" onclick="exportCSV()">↓ CSV</button>
-      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('fileInput').click()">📂 엑셀 업로드</button>
-      <button class="btn btn-primary btn-sm" onclick="addRow()">+ 행 추가</button>
+      <button class="btn btn-ghost btn-sm" onclick="resetAll()" title="검색/필터 초기화">↻ 필터 초기화</button>
+      <button class="btn btn-ghost btn-sm" onclick="exportCSV()" title="현재 목록을 CSV 파일로 저장">⬇ CSV로 내보내기</button>
+      <button class="btn btn-primary btn-sm" onclick="addRow()" title="새 발주 행 추가">+ 행 추가</button>
     </div>
-    <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" onchange="handleFile(event)" style="display:none">
   </div>
 
   <!-- Table -->
@@ -654,6 +657,7 @@ const HEADER_MAP = {
 };
 
 let allData = [];
+let rowHeights = {}; // { ai: pixelHeight } - 행별 커스텀 높이
 let filtered = [], sortCol = '', sortAsc = true, page = 1;
 const PAGE = 30;
 let modalIdx = -1, modalTab = 'link', pendingFile = null;
@@ -718,13 +722,15 @@ function processData(raw, fname) {
   });
   populateManagerFilter();
   showUI();
-  document.getElementById('headerMeta').textContent = fname + ' · ' + allData.length.toLocaleString() + '건';
+  const el = document.getElementById('headerMeta');
+  if (el) el.textContent = fname + ' · ' + allData.length.toLocaleString() + '건';
   applyFilters();
   showToast('✓ ' + allData.length + '건 불러왔습니다');
 }
 
 function showUI() {
-  document.getElementById('headerMeta').textContent = allData.length.toLocaleString() + '건';
+  const el = document.getElementById('headerMeta');
+  if (el) el.textContent = allData.length.toLocaleString() + '건';
 }
 
 // ── 담당자 필터 (고정 목록 기반) ──────────────────────────
@@ -885,6 +891,44 @@ function avatarColor(name) {
 function initials(name) { const s=String(name||''); return s.length>=2?s.slice(0,2):s||'?'; }
 
 // ── 테이블 렌더 ────────────────────────────────────────────
+// ── 행 높이 드래그 조절 ────────────────────────────────────
+let _resizeState = null;
+
+function startRowResize(e, ai) {
+  e.preventDefault();
+  e.stopPropagation();
+  const tr = document.querySelector(`tr[data-row-idx="${ai}"]`);
+  if (!tr) return;
+  _resizeState = {
+    ai,
+    startY: e.clientY,
+    startHeight: tr.offsetHeight
+  };
+  tr.classList.add('resizing');
+  document.addEventListener('mousemove', onRowResizeMove);
+  document.addEventListener('mouseup', onRowResizeEnd);
+}
+
+function onRowResizeMove(e) {
+  if (!_resizeState) return;
+  const diff = e.clientY - _resizeState.startY;
+  const newHeight = Math.max(32, _resizeState.startHeight + diff);
+  const tr = document.querySelector(`tr[data-row-idx="${_resizeState.ai}"]`);
+  if (tr) tr.style.height = newHeight + 'px';
+}
+
+function onRowResizeEnd(e) {
+  if (!_resizeState) return;
+  const tr = document.querySelector(`tr[data-row-idx="${_resizeState.ai}"]`);
+  if (tr) {
+    tr.classList.remove('resizing');
+    rowHeights[_resizeState.ai] = tr.offsetHeight;
+  }
+  _resizeState = null;
+  document.removeEventListener('mousemove', onRowResizeMove);
+  document.removeEventListener('mouseup', onRowResizeEnd);
+}
+
 function renderTable() {
   const start = (page-1)*PAGE;
   const pageData = filtered.slice(start, start+PAGE);
@@ -898,8 +942,9 @@ function renderTable() {
     const gi = start + ri;
     const ai = allData.indexOf(row);
     const [bgC, fgC] = avatarColor(row['작가']);
-    return `<tr class="${row['입고완료'] ? 'row-done' : ''}">
-      <td onclick="editText(${ai},'작가',this)" style="cursor:pointer" title="클릭해서 수정">
+    return `<tr class="${row['입고완료'] ? 'row-done' : ''}" data-row-idx="${ai}" style="${rowHeights[ai] ? `height:${rowHeights[ai]}px` : ''}">
+      <td onclick="editText(${ai},'작가',this)" style="cursor:pointer;position:relative" title="클릭해서 수정">
+        <div class="row-resize-handle" onmousedown="startRowResize(event, ${ai})" title="드래그해서 행 높이 조절"></div>
         <div class="writer-cell">
           <div class="avatar" style="background:${bgC};color:${fgC}">${initials(row['작가'])}</div>
           <span class="writer-name">${row['작가']||'—'}</span>
@@ -1205,7 +1250,6 @@ function loadSample() {
   });
   populateManagerFilter();
   showUI();
-  document.getElementById('headerMeta').textContent = 'sample.xlsx · ' + allData.length + '건';
   applyFilters();
   showToast('✓ 샘플 10건 불러왔습니다');
 }
