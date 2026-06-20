@@ -431,6 +431,7 @@
   <div class="tab-nav">
     <button class="tab-btn active" id="tab-order" onclick="switchMainTab('order')">📋 발주 리스트</button>
     <button class="tab-btn" id="tab-stock" onclick="switchMainTab('stock')">⚠️ 부족재고 요청</button>
+    <button class="tab-btn" id="tab-trash" onclick="switchMainTab('trash')">🗑 휴지통</button>
   </div>
 
   <!-- ── 발주 리스트 탭 ── -->
@@ -514,6 +515,36 @@
     <div class="stock-grid" id="stockGrid"></div>
   </div>
 
+  <!-- ── 휴지통 탭 ── -->
+  <div id="panel-trash" style="display:none">
+    <p style="font-size:13px;color:var(--text2);margin-bottom:14px">삭제된 행은 여기서 복구할 수 있어요. 완전 삭제 전까지는 안전하게 보관돼요.</p>
+    <div class="table-card">
+      <table>
+        <colgroup>
+          <col style="width:130px"><col style="width:100px"><col style="width:105px"><col style="width:105px"><col><col style="width:140px">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>작가</th>
+            <th>담당자</th>
+            <th>발주일</th>
+            <th>예상납기일</th>
+            <th>삭제 시각</th>
+            <th>작업</th>
+          </tr>
+        </thead>
+        <tbody id="trashTbody"></tbody>
+      </table>
+    </div>
+    <div id="trashEmpty" style="display:none">
+      <div class="table-card">
+        <div class="empty-state">
+          <p>🗑 휴지통이 비어 있어요</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </main>
 
 <!-- Sheet Modal -->
@@ -588,7 +619,7 @@ async function sbFetch(path, options = {}) {
 
 async function loadFromDB() {
   showToast('데이터 불러오는 중...');
-  const rows = await sbFetch('orders?select=*&order=created_at.asc');
+  const rows = await sbFetch('orders?select=*&deleted_at=is.null&order=created_at.asc');
   if (!rows) { showToast('데이터 로드 실패'); return; }
   allData = rows.map(r => {
     const sheetUrl = (r.sheet_url || '').trim();
@@ -600,12 +631,14 @@ async function loadFromDB() {
         const fileName = pathPart.split('/').pop().replace(/^\d+_/, '');
         sheet = { type: 'file', fileName: fileName || 'PDF 파일', dataUrl: sheetUrl, storagePath: pathPart };
       } else {
-        sheet = { type: 'link', url: sheetUrl, label: '' };
-        try {
-          const u = new URL(sheetUrl);
-          sheet.label = u.hostname.replace('www.', '') + '/…';
-        } catch(e) {
-          sheet.label = sheetUrl;
+        sheet = { type: 'link', url: sheetUrl, label: r.sheet_label || '' };
+        if (!sheet.label) {
+          try {
+            const u = new URL(sheetUrl);
+            sheet.label = u.hostname.replace('www.', '') + '/…';
+          } catch(e) {
+            sheet.label = sheetUrl;
+          }
         }
       }
     }
@@ -630,7 +663,8 @@ async function loadFromDB() {
 async function saveToDB(row) {
   // 발주시트 URL 추출 — _sheet 객체 또는 발주시트 필드에서
   let sheetUrl = '';
-  if (row._sheet?.type === 'link') sheetUrl = row._sheet.url || '';
+  let sheetLabel = '';
+  if (row._sheet?.type === 'link') { sheetUrl = row._sheet.url || ''; sheetLabel = row._sheet.label || ''; }
   else if (row['발주시트']) sheetUrl = row['발주시트'];
 
   const body = {
@@ -639,6 +673,7 @@ async function saveToDB(row) {
     order_date: row['발주일'] || '',
     due_date: row['예상납기일'] || '',
     sheet_url: sheetUrl,
+    sheet_label: sheetLabel,
     memo: row['메모'] || '',
     completed: row['입고완료'] || false
   };
@@ -654,7 +689,38 @@ async function saveToDB(row) {
   }
 }
 
+// ── 휴지통 (소프트 삭제) ────────────────────────────────────
 async function deleteFromDB(id) {
+  // 실제로 지우지 않고 deleted_at에 타임스탬프만 채움 (휴지통으로 이동)
+  await sbFetch(`orders?id=eq.${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ deleted_at: new Date().toISOString() }),
+    prefer: 'return=minimal'
+  });
+}
+
+async function loadTrashFromDB() {
+  const rows = await sbFetch('orders?select=*&deleted_at=not.is.null&order=deleted_at.desc');
+  if (!rows) return [];
+  return rows.map(r => ({
+    _id: r.id,
+    '작가': r.writer || '',
+    '담당자': r.manager || MANAGERS[0],
+    '발주일': r.order_date || '',
+    '예상납기일': r.due_date || '',
+    deletedAt: r.deleted_at
+  }));
+}
+
+async function restoreFromTrash(id) {
+  await sbFetch(`orders?id=eq.${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ deleted_at: null }),
+    prefer: 'return=minimal'
+  });
+}
+
+async function permanentDeleteFromDB(id) {
   await sbFetch(`orders?id=eq.${id}`, { method: 'DELETE' });
 }
 
@@ -1075,12 +1141,12 @@ function editMemo(ai, td) {
 // ── 행 삭제 ────────────────────────────────────────────────
 async function deleteRow(ai) {
   const name = allData[ai]['작가'] || '이 행';
-  if (!confirm(`"${name}" 행을 삭제할까요?`)) return;
+  if (!confirm(`"${name}" 행을 휴지통으로 이동할까요?\n(휴지통에서 다시 복구할 수 있어요)`)) return;
   const id = allData[ai]._id;
   if (id) await deleteFromDB(id);
   allData.splice(ai, 1);
   applyFilters();
-  showToast('삭제됐습니다');
+  showToast('🗑 휴지통으로 이동했습니다');
 }
 
 // ── 입고 완료 토글 ─────────────────────────────────────────
@@ -1368,9 +1434,54 @@ loadStockFromDB();
 function switchMainTab(tab) {
   document.getElementById('panel-order').style.display = tab === 'order' ? '' : 'none';
   document.getElementById('panel-stock').style.display = tab === 'stock' ? '' : 'none';
+  document.getElementById('panel-trash').style.display = tab === 'trash' ? '' : 'none';
   document.getElementById('tab-order').classList.toggle('active', tab === 'order');
   document.getElementById('tab-stock').classList.toggle('active', tab === 'stock');
+  document.getElementById('tab-trash').classList.toggle('active', tab === 'trash');
   if (tab === 'stock') renderStockCards();
+  if (tab === 'trash') renderTrash();
+}
+
+// ── 휴지통 렌더링 ──────────────────────────────────────────
+async function renderTrash() {
+  const tbody = document.getElementById('trashTbody');
+  tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:24px">불러오는 중...</td></tr>`;
+  const trashed = await loadTrashFromDB();
+
+  document.getElementById('trashEmpty').style.display = trashed.length === 0 ? '' : 'none';
+  if (!trashed.length) { tbody.innerHTML = ''; return; }
+
+  tbody.innerHTML = trashed.map(r => {
+    const d = r.deletedAt ? new Date(r.deletedAt) : null;
+    const delStr = d ? `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}` : '—';
+    return `<tr>
+      <td>${r['작가'] || '—'}</td>
+      <td>${r['담당자'] || '—'}</td>
+      <td>${fmtDate(r['발주일'])}</td>
+      <td>${fmtDate(r['예상납기일'])}</td>
+      <td><span style="font-size:12px;color:var(--text3)">${delStr}</span></td>
+      <td>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-primary btn-sm" onclick="handleRestore(${r._id})">↩ 복구</button>
+          <button class="btn btn-ghost btn-sm" onclick="handlePermanentDelete(${r._id})" style="color:var(--red);border-color:#f5b0b0">완전 삭제</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function handleRestore(id) {
+  await restoreFromTrash(id);
+  showToast('✓ 복구됐습니다');
+  await loadFromDB();
+  renderTrash();
+}
+
+async function handlePermanentDelete(id) {
+  if (!confirm('완전히 삭제하면 복구할 수 없어요. 정말 삭제할까요?')) return;
+  await permanentDeleteFromDB(id);
+  showToast('완전히 삭제됐습니다');
+  renderTrash();
 }
 
 // ── 부족재고 데이터 ────────────────────────────────────────
