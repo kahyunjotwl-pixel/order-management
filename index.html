@@ -329,8 +329,15 @@
     position: fixed; bottom: 28px; right: 28px; background: var(--text); color: #fff;
     padding: 10px 18px; border-radius: var(--radius-sm); font-size: 13px;
     opacity: 0; transform: translateY(8px); transition: all 0.2s; z-index: 999; pointer-events: none;
+    display: flex; align-items: center; gap: 12px;
   }
-  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
+  .toast-undo-btn {
+    background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3);
+    color: #fff; font-size: 12px; font-weight: 600; padding: 4px 10px;
+    border-radius: 5px; cursor: pointer; white-space: nowrap; flex-shrink: 0;
+  }
+  .toast-undo-btn:hover { background: rgba(255,255,255,0.25); }
 
   /* PDF 뷰어 모달 */
   .pdf-modal {
@@ -691,6 +698,7 @@ async function saveToDB(row) {
 
 // ── 휴지통 (소프트 삭제) ────────────────────────────────────
 async function deleteFromDB(id) {
+  if (!id && id !== 0) { console.error('deleteFromDB: id가 없어 작업을 건너뜁니다'); return; }
   // 실제로 지우지 않고 deleted_at에 타임스탬프만 채움 (휴지통으로 이동)
   await sbFetch(`orders?id=eq.${id}`, {
     method: 'PATCH',
@@ -713,6 +721,7 @@ async function loadTrashFromDB() {
 }
 
 async function restoreFromTrash(id) {
+  if (!id && id !== 0) { console.error('restoreFromTrash: id가 없어 작업을 건너뜁니다'); return; }
   await sbFetch(`orders?id=eq.${id}`, {
     method: 'PATCH',
     body: JSON.stringify({ deleted_at: null }),
@@ -721,6 +730,7 @@ async function restoreFromTrash(id) {
 }
 
 async function permanentDeleteFromDB(id) {
+  if (!id && id !== 0) { console.error('permanentDeleteFromDB: id가 없어 작업을 건너뜁니다'); return; }
   await sbFetch(`orders?id=eq.${id}`, { method: 'DELETE' });
 }
 
@@ -1146,7 +1156,13 @@ async function deleteRow(ai) {
   if (id) await deleteFromDB(id);
   allData.splice(ai, 1);
   applyFilters();
-  showToast('🗑 휴지통으로 이동했습니다');
+  showToast(`"${name}" 삭제됨`, async () => {
+    if (id) {
+      await restoreFromTrash(id);
+      showToast('✓ 복구됐습니다');
+      await loadFromDB();
+    }
+  });
 }
 
 // ── 입고 완료 토글 ─────────────────────────────────────────
@@ -1517,6 +1533,7 @@ async function saveStockToDB(card) {
 }
 
 async function deleteStockFromDB(id) {
+  if (!id && id !== 0) { console.error('deleteStockFromDB: id가 없어 삭제를 건너뜁니다'); return; }
   await sbFetch(`stock_requests?id=eq.${id}`, { method: 'DELETE' });
 }
 
@@ -1775,9 +1792,21 @@ function renderStockCards() {
 }
 
 // ── 토스트 ─────────────────────────────────────────────────
-function showToast(msg) {
-  const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show');
-  setTimeout(()=>t.classList.remove('show'),2000);
+let _toastTimer = null;
+function showToast(msg, undoFn) {
+  const t = document.getElementById('toast');
+  if (_toastTimer) clearTimeout(_toastTimer);
+  if (undoFn) {
+    t.innerHTML = `<span>${msg}</span><button class="toast-undo-btn" id="toastUndoBtn">되돌리기</button>`;
+    document.getElementById('toastUndoBtn').onclick = () => {
+      undoFn();
+      t.classList.remove('show');
+    };
+  } else {
+    t.innerHTML = `<span>${msg}</span>`;
+  }
+  t.classList.add('show');
+  _toastTimer = setTimeout(() => t.classList.remove('show'), undoFn ? 6000 : 2000);
 }
 </script>
 </body>
