@@ -1547,7 +1547,8 @@ async function loadStockFromDB() {
     try { items = JSON.parse(r.items || '[]'); } catch(e) { items = []; }
     try { checkedBy = JSON.parse(r.checked_by || '[]'); } catch(e) { checkedBy = []; }
     return {
-      _id: r.id,
+      id: ++stockIdSeq,   // 로컬 id (렌더링/함수 매핑용)
+      _id: r.id,          // Supabase DB id
       writer: r.writer || '',
       manager: r.manager || MANAGERS[0],
       items: items.length ? items : [{ product:'', qty:'', memo:'' }],
@@ -1596,11 +1597,16 @@ async function addStockCard(writerName, managerName) {
 }
 
 async function deleteStockCard(id) {
+  if (!id && id !== 0) { console.error('deleteStockCard: id가 없음'); return; }
   const card = stockCards.find(c => c.id === id);
-  if (card?._id) await deleteStockFromDB(card._id);
+  if (!card) { console.error('deleteStockCard: 카드를 찾을 수 없음', id); return; }
+  const name = card.writer || '이 카드';
+  if (!confirm(`"${name}" 부족재고 카드를 삭제할까요?`)) return;
+  if (card._id) await deleteStockFromDB(card._id);
   stockCards = stockCards.filter(c => c.id !== id);
   renderStockCards();
   renderTable();
+  showToast(`"${name}" 카드가 삭제됐습니다`);
 }
 
 function addStockItem(id) {
