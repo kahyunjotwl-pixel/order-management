@@ -626,7 +626,7 @@ async function sbFetch(path, options = {}) {
 
 async function loadFromDB() {
   showToast('데이터 불러오는 중...');
-  const rows = await sbFetch('orders?select=*&deleted_at=is.null&order=created_at.asc');
+  const rows = await sbFetch('orders?select=*&order=created_at.asc&deleted_at=is.null');
   if (!rows) { showToast('데이터 로드 실패'); return; }
   allData = rows.map(r => {
     const sheetUrl = (r.sheet_url || '').trim();
@@ -748,6 +748,7 @@ const HEADER_MAP = {
 
 let allData = [];
 let rowHeights = {}; // { ai: pixelHeight } - 행별 커스텀 높이
+let _toastTimer = null;
 let filtered = [], sortCol = '', sortAsc = true, page = 1;
 const PAGE = 30;
 let modalIdx = -1, modalTab = 'link', pendingFile = null;
@@ -1792,7 +1793,6 @@ function renderStockCards() {
 }
 
 // ── 토스트 ─────────────────────────────────────────────────
-let _toastTimer = null;
 function showToast(msg, undoFn) {
   const t = document.getElementById('toast');
   if (_toastTimer) clearTimeout(_toastTimer);
