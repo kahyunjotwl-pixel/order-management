@@ -216,6 +216,21 @@
     background: var(--green-bg); color: var(--green); border-color: #9FE1CB;
   }
   .status-toggle.done:hover { background: #c8eede; }
+  /* 신제품 토글 */
+  .new-toggle {
+    display: inline-flex; align-items: center; justify-content: center; gap: 3px;
+    font-size: 11px; font-weight: 600; padding: 4px 10px;
+    border-radius: 20px; border: 1.5px solid; cursor: pointer;
+    transition: all 0.15s; white-space: nowrap; font-family: inherit;
+  }
+  .new-toggle.off {
+    background: var(--surface2); color: var(--text3); border-color: var(--border2);
+  }
+  .new-toggle.off:hover { background: var(--accent-light); color: var(--accent); border-color: var(--accent); }
+  .new-toggle.on {
+    background: var(--accent-light); color: var(--accent); border-color: var(--accent);
+  }
+  .new-toggle.on:hover { opacity: 0.85; }
   /* 완료된 행 배경 */
   tbody tr.row-done { background: #F4FBF7; }
   tbody tr.row-done td { color: var(--text2); }
@@ -483,7 +498,7 @@
             <th><div class="th-inner">발주 시트</div><div class="col-resize-handle" data-col="c-sheet" onmousedown="startColResize(event,'c-sheet')"></div></th>
             <th><div class="th-inner">메모</div><div class="col-resize-handle" data-col="c-memo" onmousedown="startColResize(event,'c-memo')"></div></th>
             <th onclick="sortBy('입고완료')" id="th-입고완료"><div class="th-inner">입고 완료 <span class="sort-arrow">↕</span></div></th>
-            <th style="width:80px"><div class="th-inner">부족재고</div></th>
+            <th style="width:80px"><div class="th-inner">신제품</div></th>
           </tr>
         </thead>
         <tbody id="tbody"></tbody>
@@ -660,6 +675,7 @@ async function loadFromDB() {
       '발주시트': sheetUrl,
       '메모': r.memo || '',
       '입고완료': r.completed || false,
+      '신제품': r.is_new || false,
       _sheet: sheet
     };
   });
@@ -684,7 +700,8 @@ async function saveToDB(row) {
     sheet_url: sheetUrl,
     sheet_label: sheetLabel,
     memo: row['메모'] || '',
-    completed: row['입고완료'] || false
+    completed: row['입고완료'] || false,
+    is_new: row['신제품'] || false
   };
   if (row._id) {
     await sbFetch(`orders?id=eq.${row._id}`, {
@@ -1105,21 +1122,9 @@ function renderTable() {
         </div>
       </td>
       <td style="text-align:center;width:90px">
-        ${(() => {
-          const writerName = row['작가'] || '';
-          const sc = stockCards.filter(c => c.writer === writerName);
-          const cnt = sc.length;
-          const hasUnread = sc.some(c => c.unread);
-          let btnCls = '';
-          if (cnt > 0) {
-            btnCls = hasUnread ? 'has-stock unread' : 'all-done';
-          }
-          return `<button class="stock-link-btn ${btnCls}"
-            onclick="goToStock('${writerName.replace(/'/g,"\\'")}','${(row['담당자']||'').replace(/'/g,"\\'")}')">
-            📦${cnt > 0 ? ` <span class="stock-cnt">${cnt}</span>` : ''}
-            ${hasUnread ? '<span class="unread-dot"></span>' : ''}
-          </button>`;
-        })()}
+        <button class="new-toggle ${row['신제품'] ? 'on' : 'off'}" onclick="toggleNew(${ai})" title="${row['신제품'] ? '신제품 — 클릭해서 해제' : '클릭해서 신제품으로 표시'}">
+          🆕 ${row['신제품'] ? 'ON' : 'OFF'}
+        </button>
       </td>
     </tr>`;
   }).join('');
@@ -1174,6 +1179,13 @@ async function toggleStatus(ai) {
   await saveToDB(allData[ai]);
   applyFilters();
   showToast(allData[ai]['입고완료'] ? '✓ 입고 완료 처리됨' : '입고 대기로 변경됨');
+}
+
+async function toggleNew(ai) {
+  allData[ai]['신제품'] = !allData[ai]['신제품'];
+  await saveToDB(allData[ai]);
+  applyFilters();
+  showToast(allData[ai]['신제품'] ? '🆕 신제품으로 표시됨' : '신제품 표시 해제됨');
 }
 
 // ── 인라인 편집 ────────────────────────────────────────────
