@@ -1583,15 +1583,22 @@ function goToStock(writerName, managerName) {
 // ── 잔디 Webhook 알림 ──────────────────────────────────────
 const JANDI_WEBHOOK_URL = 'https://wh.jandi.com/connect-api/webhook/25546241/e06c7517858c49b2dbe932d27e1e5937';
 
-async function sendJandiAlert(writer, manager) {
+async function sendJandiAlert(writer, manager, items) {
   const today = new Date();
   const dateStr = `${today.getFullYear()}.${String(today.getMonth()+1).padStart(2,'0')}.${String(today.getDate()).padStart(2,'0')}`;
+  // 상품 목록 텍스트로 변환
+  const itemText = (items || [])
+    .filter(i => i.product)
+    .map(i => `• ${i.product}${i.qty ? ' ' + i.qty + '개' : ''}${i.memo ? ' (' + i.memo + ')' : ''}`)
+    .join('\n') || '(상품 미입력)';
+
   const body = {
     body: `📦 부족재고 요청이 등록됐습니다`,
     connectColor: '#D4A017',
     connectInfo: [
       { title: '작가', description: writer || '(미입력)' },
       { title: '담당자', description: manager || '(미입력)' },
+      { title: '요청 상품', description: itemText },
       { title: '등록일', description: dateStr },
       { title: '확인', description: '👉 발주 관리 사이트에서 확인해주세요' }
     ]
@@ -1623,8 +1630,6 @@ async function addStockCard(writerName, managerName) {
   showToast('요청 카드가 추가됐습니다');
   await saveStockToDB(card);
   renderStockCards(); // _id 반영
-  // 잔디 알림 전송 (백그라운드)
-  sendJandiAlert(card.writer, card.manager);
 }
 
 async function deleteStockCard(id) {
@@ -1711,6 +1716,10 @@ function cycleStockStatus(id) {
   const labels = { pending:'미요청', requested:'요청됨' };
   showToast('상태: ' + labels[card.status]);
   saveStockToDB(card);
+  // 요청됨으로 변경될 때만 잔디 알림 전송
+  if (card.status === 'requested') {
+    sendJandiAlert(card.writer, card.manager, card.items);
+  }
 }
 
 function populateStockManagerFilter() {
