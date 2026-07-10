@@ -908,13 +908,12 @@ function resetAll() {
 
 // ── 통계 ───────────────────────────────────────────────────
 function renderStats() {
-  const today = new Date(); today.setHours(0,0,0,0);
   const total    = filtered.length;
   const writers  = new Set(filtered.map(r=>r['작가']||'').filter(Boolean)).size;
   const hasSheet = filtered.filter(r=>r._sheet).length;
   const overdue  = filtered.filter(r => {
     const d = parseLocalDate(r['예상납기일']);
-    return d && d < today;
+    return d && d < _today;
   }).length;
   document.getElementById('statsRow').innerHTML = `
     <div class="stat-card" style="border-left:3px solid var(--accent)">
@@ -934,7 +933,7 @@ function renderStats() {
 }
 
 // ── 날짜 포맷 ──────────────────────────────────────────────
-// "YYYY-MM-DD" 문자열을 UTC가 아닌 '로컬 자정' 기준으로 파싱 (KST 등에서 D-day 하루 밀림 방지)
+// "YYYY-MM-DD" 문자열을 UTC가 아닌 '로컬 자정' 기준으로 파싱 (타임존 차이로 인한 하루 밀림 방지)
 function parseLocalDate(val) {
   if (!val) return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(val);
@@ -943,7 +942,18 @@ function parseLocalDate(val) {
   return isNaN(d) ? null : d;
 }
 
-const _today = new Date(); _today.setHours(0,0,0,0);
+// 접속 기기의 타임존과 무관하게 '한국(Asia/Seoul) 기준 오늘' 자정을 구함
+function getTodaySeoul() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(new Date());
+  const y = +parts.find(p => p.type === 'year').value;
+  const m = +parts.find(p => p.type === 'month').value;
+  const d = +parts.find(p => p.type === 'day').value;
+  return new Date(y, m - 1, d);
+}
+
+const _today = getTodaySeoul();
 
 function fmtDate(val) {
   if (!val) return '<span class="date-empty">—</span>';
@@ -959,7 +969,8 @@ function fmtDueDate(val) {
   if (!d || isNaN(d)) return `<span class="date-val">${val}</span>`;
   const diff = Math.round((d - _today) / 86400000);
   const fmt  = `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`;
-  if (diff < 0)  return `<span class="date-overdue">${fmt} <small>(D${diff})</small></span>`;
+  if (diff < 0)  return `<span class="date-overdue">${fmt} <small>(D+${-diff})</small></span>`;
+  if (diff === 0) return `<span class="date-soon">${fmt} <small>(D-DAY)</small></span>`;
   if (diff <= 7) return `<span class="date-soon">${fmt} <small>(D-${diff})</small></span>`;
   return `<span class="date-val">${fmt}</span>`;
 }
