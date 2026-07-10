@@ -913,8 +913,8 @@ function renderStats() {
   const writers  = new Set(filtered.map(r=>r['작가']||'').filter(Boolean)).size;
   const hasSheet = filtered.filter(r=>r._sheet).length;
   const overdue  = filtered.filter(r => {
-    const d = new Date(r['예상납기일']||'');
-    return !isNaN(d) && d < today;
+    const d = parseLocalDate(r['예상납기일']);
+    return d && d < today;
   }).length;
   document.getElementById('statsRow').innerHTML = `
     <div class="stat-card" style="border-left:3px solid var(--accent)">
@@ -934,21 +934,30 @@ function renderStats() {
 }
 
 // ── 날짜 포맷 ──────────────────────────────────────────────
+// "YYYY-MM-DD" 문자열을 UTC가 아닌 '로컬 자정' 기준으로 파싱 (KST 등에서 D-day 하루 밀림 방지)
+function parseLocalDate(val) {
+  if (!val) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(val);
+  if (m) return new Date(+m[1], +m[2]-1, +m[3]);
+  const d = new Date(val);
+  return isNaN(d) ? null : d;
+}
+
 const _today = new Date(); _today.setHours(0,0,0,0);
 
 function fmtDate(val) {
   if (!val) return '<span class="date-empty">—</span>';
-  const d = new Date(val);
-  if (isNaN(d)) return `<span class="date-val">${val}</span>`;
+  const d = parseLocalDate(val);
+  if (!d || isNaN(d)) return `<span class="date-val">${val}</span>`;
   const fmt = `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`;
   return `<span class="date-val">${fmt}</span>`;
 }
 
 function fmtDueDate(val) {
   if (!val) return '<span class="date-empty">—</span>';
-  const d = new Date(val);
-  if (isNaN(d)) return `<span class="date-val">${val}</span>`;
-  const diff = Math.ceil((d - _today) / 86400000);
+  const d = parseLocalDate(val);
+  if (!d || isNaN(d)) return `<span class="date-val">${val}</span>`;
+  const diff = Math.round((d - _today) / 86400000);
   const fmt  = `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`;
   if (diff < 0)  return `<span class="date-overdue">${fmt} <small>(D${diff})</small></span>`;
   if (diff <= 7) return `<span class="date-soon">${fmt} <small>(D-${diff})</small></span>`;
@@ -1353,6 +1362,8 @@ async function deletePdfFromStorage(path) {
 async function saveModal() {
   if (modalIdx < 0) return;
   const row = allData[modalIdx];
+  const wasExisting = !!row._sheet;
+  let sheetLabel = '';
   if (modalTab === 'link') {
     const url = document.getElementById('linkInput').value.trim();
     if (!url) { showToast('URL을 입력해 주세요'); return; }
@@ -1360,8 +1371,10 @@ async function saveModal() {
     if (row._sheet?.type === 'file' && row._sheet?.storagePath) {
       await deletePdfFromStorage(row._sheet.storagePath);
     }
-    row._sheet = { type:'link', url, label: document.getElementById('linkLabel').value.trim() || url };
+    const label = document.getElementById('linkLabel').value.trim() || url;
+    row._sheet = { type:'link', url, label };
     row['발주시트'] = url;
+    sheetLabel = label;
   } else {
     if (!pendingFile) { showToast('파일을 선택해 주세요'); return; }
     showToast('PDF 업로드 중...');
@@ -1373,12 +1386,14 @@ async function saveModal() {
     if (!uploaded) { showToast('업로드 실패 — 다시 시도해 주세요'); return; }
     row._sheet = { type:'file', fileName: pendingFile.fileName, dataUrl: uploaded.url, storagePath: uploaded.path };
     row['발주시트'] = uploaded.url;
+    sheetLabel = pendingFile.fileName;
   }
   await saveToDB(row);
   document.getElementById('modalBg').classList.remove('open');
   pendingFile = null;
   applyFilters();
   showToast('✓ 저장됐습니다');
+  sendJandiSheetAlert(row['작가'], row['담당자'], sheetLabel, wasExisting);
 }
 
 // 발주시트(링크/PDF) 연결 해제 + PDF면 Storage에서도 삭제
@@ -1611,6 +1626,31 @@ async function sendJandiAlert(writer, manager, items) {
       { title: '작가', description: writer || '(미입력)' },
       { title: '담당자', description: manager || '(미입력)' },
       { title: '요청 상품', description: itemText },
+      { title: '등록일', description: dateStr },
+      { title: '확인', description: '👉 발주 관리 사이트에서 확인해주세요' }
+    ]
+  };
+  try {
+    await fetch(JANDI_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  } catch(e) {
+    console.error('잔디 알림 전송 실패:', e);
+  }
+}
+
+async function sendJandiSheetAlert(writer, manager, sheetLabel, isReplace) {
+  const today = new Date();
+  const dateStr = `${today.getFullYear()}.${String(today.getMonth()+1).padStart(2,'0')}.${String(today.getDate()).padStart(2,'0')}`;
+  const body = {
+    body: `📄 발주 시트가 ${isReplace ? '교체' : '등록'}됐습니다`,
+    connectColor: '#2B5CE6',
+    connectInfo: [
+      { title: '작가', description: writer || '(미입력)' },
+      { title: '담당자', description: manager || '(미입력)' },
+      { title: '발주 시트', description: sheetLabel || '(정보 없음)' },
       { title: '등록일', description: dateStr },
       { title: '확인', description: '👉 발주 관리 사이트에서 확인해주세요' }
     ]
