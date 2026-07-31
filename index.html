@@ -975,14 +975,18 @@ function applyFilters() {
 }
 
 function defaultSort() {
-  // 미완료 먼저, 같은 그룹 안에서는 납기일 오름차순 (빈 값은 맨 뒤)
+  // 미완료 먼저. 그 중에서도 '예상 납기일'이 아직 없는 행(=방금 추가해서 정보가 안 채워진 행)은
+  // 맨 위에, 최근에 추가된 순(id 큰 순)으로 보여줌. 납기일이 있는 행은 그 아래에 오름차순 정렬.
   filtered.sort((a, b) => {
     const da = a['입고완료'] ? 1 : 0;
     const db = b['입고완료'] ? 1 : 0;
     if (da !== db) return da - db;
-    const dateA = a['예상납기일'] ? new Date(a['예상납기일']) : new Date('9999-12-31');
-    const dateB = b['예상납기일'] ? new Date(b['예상납기일']) : new Date('9999-12-31');
-    return dateA - dateB;
+
+    const hasA = !!a['예상납기일'], hasB = !!b['예상납기일'];
+    if (hasA !== hasB) return hasA ? 1 : -1;
+    if (!hasA && !hasB) return (b._id||0) - (a._id||0);
+
+    return new Date(a['예상납기일']) - new Date(b['예상납기일']);
   });
 }
 
