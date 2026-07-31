@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>발주 리스트</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
   :root {
     --bg: #F7F6F3;
@@ -231,6 +232,41 @@
     background: var(--accent-light); color: var(--accent); border-color: var(--accent);
   }
   .new-toggle.on:hover { opacity: 0.85; }
+  /* 로그인 화면 */
+  .login-screen {
+    position: fixed; inset: 0; background: var(--bg);
+    display: flex; align-items: center; justify-content: center; z-index: 1000;
+  }
+  .login-box {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 36px 32px; width: 100%; max-width: 340px;
+  }
+  .login-box .logo { justify-content: center; margin-bottom: 24px; font-size: 16px; }
+  .login-field { margin-bottom: 14px; }
+  .login-field label { display: block; font-size: 12px; font-weight: 600; color: var(--text2); margin-bottom: 6px; }
+  .login-field input {
+    width: 100%; padding: 10px 12px; border: 1px solid var(--border2); border-radius: var(--radius-sm);
+    font-size: 14px; font-family: inherit; background: var(--surface); color: var(--text);
+  }
+  .login-field input:focus { outline: none; border-color: var(--accent); }
+  .login-btn {
+    width: 100%; padding: 11px; margin-top: 6px; background: var(--accent); color: #fff;
+    border: none; border-radius: var(--radius-sm); font-size: 14px; font-weight: 600;
+    cursor: pointer; font-family: inherit; transition: opacity .15s;
+  }
+  .login-btn:hover { opacity: 0.9; }
+  .login-btn:disabled { opacity: 0.6; cursor: default; }
+  .login-error {
+    background: var(--red-bg); color: var(--red); font-size: 12.5px; padding: 9px 12px;
+    border-radius: var(--radius-sm); margin-bottom: 14px; display: none;
+  }
+  .logout-btn {
+    background: var(--surface2); color: var(--text2); border: 1px solid var(--border2);
+    border-radius: var(--radius-sm); padding: 6px 12px; font-size: 12.5px; font-weight: 500;
+    cursor: pointer; font-family: inherit;
+  }
+  .logout-btn:hover { background: var(--surface); color: var(--text); }
+
   /* 완료된 행 배경 */
   tbody tr.row-done { background: #F4FBF7; }
   tbody tr.row-done td { color: var(--text2); }
@@ -441,11 +477,31 @@
 </head>
 <body>
 
+<!-- 로그인 화면 -->
+<div class="login-screen" id="loginScreen">
+  <div class="login-box">
+    <div class="logo"><div class="logo-dot"></div>발주 관리</div>
+    <div class="login-error" id="loginError"></div>
+    <form id="loginForm" onsubmit="return false;">
+      <div class="login-field">
+        <label>이메일</label>
+        <input type="email" id="loginEmail" autocomplete="username" required>
+      </div>
+      <div class="login-field">
+        <label>비밀번호</label>
+        <input type="password" id="loginPassword" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="login-btn" id="loginBtn" onclick="handleLogin()">로그인</button>
+    </form>
+  </div>
+</div>
+
 <header class="app-header">
   <div class="logo"><div class="logo-dot"></div>발주 관리</div>
+  <button class="logout-btn" id="logoutBtn" onclick="handleLogout()" style="display:none">로그아웃</button>
 </header>
 
-<main class="main">
+<main class="main" id="mainApp" style="display:none">
   <div class="page-title">
     <h1>발주 관리</h1>
     <p>셀을 클릭해서 바로 수정하세요. &nbsp;|&nbsp; <a href="https://docs.google.com/spreadsheets/d/1hly9RPPXH_nQPuVDONoQtlwVHdGMkdduFhMqA7eUB6c/edit?gid=1114172835#gid=1114172835" target="_blank" style="color:var(--accent);font-weight:500;text-decoration:none;">📊 재고 판매량 대시보드 ↗</a></p>
@@ -626,10 +682,16 @@
 const SUPABASE_URL = 'https://speefcrxzdaugaxljbau.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNwZWVmY3J4emRhdWdheGxqYmF1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzNzg1MTYsImV4cCI6MjA5Njk1NDUxNn0.w2w4f-9vjCZDU_imXVMcXXSMameK30my9T6UU_dJVgE';
 
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true }
+});
+
 async function sbFetch(path, options = {}) {
+  const { data: { session } } = await sb.auth.getSession();
+  const token = session?.access_token || SUPABASE_KEY;
   const headers = {
     'apikey': SUPABASE_KEY,
-    'Authorization': `Bearer ${SUPABASE_KEY}`,
+    'Authorization': `Bearer ${token}`,
     'Content-Type': 'application/json',
   };
   if (options.prefer) headers['Prefer'] = options.prefer;
@@ -640,6 +702,54 @@ async function sbFetch(path, options = {}) {
   if (!res.ok) { console.error(await res.text()); return null; }
   return res.json();
 }
+
+// ── 로그인 / 로그아웃 ──────────────────────────────────────
+async function handleLogin() {
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  const errBox = document.getElementById('loginError');
+  const btn = document.getElementById('loginBtn');
+  errBox.style.display = 'none';
+  if (!email || !password) return;
+  btn.disabled = true; btn.textContent = '로그인 중...';
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  btn.disabled = false; btn.textContent = '로그인';
+  if (error) {
+    errBox.textContent = '이메일 또는 비밀번호가 올바르지 않습니다.';
+    errBox.style.display = 'block';
+    return;
+  }
+  enterApp();
+}
+
+async function handleLogout() {
+  await sb.auth.signOut();
+  document.getElementById('loginScreen').style.display = 'flex';
+  document.getElementById('mainApp').style.display = 'none';
+  document.getElementById('logoutBtn').style.display = 'none';
+  document.getElementById('loginEmail').value = '';
+  document.getElementById('loginPassword').value = '';
+}
+
+function enterApp() {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('mainApp').style.display = '';
+  document.getElementById('logoutBtn').style.display = '';
+  loadFromDB();
+  loadStockFromDB();
+}
+
+async function checkSession() {
+  const { data: { session } } = await sb.auth.getSession();
+  if (session) enterApp();
+  else document.getElementById('loginScreen').style.display = 'flex';
+}
+
+document.getElementById('loginPassword').addEventListener('keydown', e => {
+  if (e.key === 'Enter') handleLogin();
+});
+
+
 
 async function loadFromDB() {
   showToast('데이터 불러오는 중...');
@@ -1343,13 +1453,15 @@ function attachFile(file) {
 
 // ── Supabase Storage 업로드/삭제 ───────────────────────────
 async function uploadPdfToStorage(file, writerName) {
+  const { data: { session } } = await sb.auth.getSession();
+  const token = session?.access_token || SUPABASE_KEY;
   const safeWriter = (writerName || 'unknown').replace(/[^\w가-힣]/g, '_');
   const path = `${safeWriter}/${Date.now()}_${file.name}`;
   const res = await fetch(`${SUPABASE_URL}/storage/v1/object/order-sheets/${encodeURIComponent(path)}`, {
     method: 'POST',
     headers: {
       'apikey': SUPABASE_KEY,
-      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Authorization': `Bearer ${token}`,
       'Content-Type': file.type || 'application/pdf'
     },
     body: file
@@ -1361,11 +1473,13 @@ async function uploadPdfToStorage(file, writerName) {
 
 async function deletePdfFromStorage(path) {
   if (!path) return;
+  const { data: { session } } = await sb.auth.getSession();
+  const token = session?.access_token || SUPABASE_KEY;
   await fetch(`${SUPABASE_URL}/storage/v1/object/order-sheets/${encodeURIComponent(path)}`, {
     method: 'DELETE',
     headers: {
       'apikey': SUPABASE_KEY,
-      'Authorization': `Bearer ${SUPABASE_KEY}`
+      'Authorization': `Bearer ${token}`
     }
   });
 }
@@ -1481,11 +1595,10 @@ function loadSample() {
   showToast('✓ 샘플 10건 불러왔습니다');
 }
 
-// 페이지 로드 시 DB에서 데이터 불러오기
+// 페이지 로드 시: 로그인 상태 확인 후 데이터 불러오기
 populateManagerFilter();
 populateStockManagerFilter();
-loadFromDB();
-loadStockFromDB();
+checkSession();
 
 // ── 탭 전환 ────────────────────────────────────────────────
 function switchMainTab(tab) {
